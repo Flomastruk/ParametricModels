@@ -108,7 +108,7 @@ class ModelFromConcreteFunction(ParametricModel):
         return objective # train step returns current loss value
 
 
-    def fit(self, input_features, input_labels, num_steps, weights = None, loss = None, optimizer = None):
+    def fit(self, input_features, input_labels, num_steps, weights = None, loss = None, optimizer = None, verbose = True):
         """
         Fit the model based on a set of input features and labels
         """
@@ -121,15 +121,15 @@ class ModelFromConcreteFunction(ParametricModel):
         if optimizer is None:
             optimizer = self.optimizer
 
-        for t in tqdm.tqdm(range(num_steps)):
+        for t in tqdm.tqdm(range(num_steps), disable = not verbose):
             self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer)
             # print(weights)
 
         # print("Current Predictions:\n")
         # print(self(input_features))
-
-        log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
-        print(log_str)
+        if verbose:
+            log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
+            print(log_str)
 
         return weights
 
@@ -141,22 +141,19 @@ class ModelFromConcreteFunction(ParametricModel):
             return
         return self.simulation_scheme(num_samples)
 
-    def fit_simulated_experiments(self, num_samples, num_experiments, num_steps, weights = None, loss = None, optimizer = None):
+    def fit_simulated_experiments(self, num_samples, num_experiments, num_steps, weights = None, loss = None, optimizer = None, verbose = True):
         res = []
         weights = self.weights if weights is None else weights
 
         weights_ = self.create_weight_dictionary(weights)
         print("Begin fitting simulated experiments...")
-        for ix_experiment in range(num_experiments):
+        for ix_experiment in tqdm.tqdm(range(num_experiments), disable = not verbose):
             # reset weights to the initial guess
             self.assign_weights(weights_, weights)
             sample_input, sample_labels = self.simulate_experiment(num_samples)
-
-            self.fit(sample_input, sample_labels, num_steps, weights =  weights_, loss = loss, optimizer = optimizer)
-
-            print(weights_)
-            print(tensor_to_numpy_dict(weights_))
+            self.fit(sample_input, sample_labels, num_steps, weights =  weights_, loss = loss, optimizer = optimizer, verbose = False)
             res.append(tensor_to_numpy_dict(weights_))
+
         return res
 
     def d1d1t_plug_in_estimator(self, input_features, input_lables, weights = None):

@@ -4,8 +4,15 @@ import os
 os.chdir('../../Other/ParametricModels')
 os.getcwd()
 
-from classes import ModelFromConcreteFunction
+import numpy as np
 import tensorflow as tf
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+plt.style.use('seaborn')
+
+from classes import ModelFromConcreteFunction
+from utils import ravel_dicts
 
 
 
@@ -26,7 +33,6 @@ def linear_gaussian_simulation_scheme(X_mean, X_cov, weights, y_ssq):
         y_sim = linear_equation(X_sim, weights) + err
 
         return X_sim, y_sim
-
     return concrete_linear_simulation_scheme
 
 W = tf.Variable([[-1],[1]], dtype = tf.float32)
@@ -41,7 +47,7 @@ sample_input = np.matrix(np.arange(tmp_n_samples*2).reshape(tmp_n_samples,2).ast
 sample_input[:,1] = np.tile([-1.,1], tmp_n_samples//2 + 1)[:tmp_n_samples][:,np.newaxis]
 sample_labels = (sample_input[:,0] + sample_input[:,1] - 1).ravel() # 1, -1, 1
 
-optimizer = tf.keras.optimizers.Adam(learning_rate = 3e-2)
+optimizer = tf.keras.optimizers.Adam(learning_rate = 1e-2)
 # mc.fit(sample_input, sample_labels, 10, weights = linear_weights, loss = sq_loss, optimizer = optimizer)
 
 
@@ -49,9 +55,10 @@ W0 = tf.Variable([[-.5],[.8]], dtype = tf.float32)
 b0 = tf.Variable(1.0, dtype = tf.float32)
 linear_weights0 = {'W': W0, 'b': b0}
 
+X_cov = np.array([[1,.95], [.95,1]], dtype = np.float32)
 mc.simulation_scheme = linear_gaussian_simulation_scheme(
     np.array([0., 0.], dtype = np.float32),
-    np.eye(2, dtype = np.float32),
+    X_cov,
     linear_weights0,
     y_ssq = 9
     )
@@ -59,12 +66,28 @@ mc.simulation_scheme = linear_gaussian_simulation_scheme(
 
 # mc.simulate_experiment(10)
 res = mc.fit_simulated_experiments(num_samples = 100
-    , num_experiments = 4
-    , num_steps = 1000
+    , num_experiments = 100
+    , num_steps = 2000
     , weights = linear_weights0
     , loss = sq_loss
     , optimizer = optimizer)
 
 
+tmp = ravel_dicts(res)
+theoretical_tmp = (W0.numpy().T + 0.1*np.random.multivariate_normal(np.zeros(2), 9*np.linalg.inv(X_cov), size = 100))
 
-ravel_dicts(res)
+(1/.19*9*0.01)**.5
+
+# Adam
+fig, ax = plt.subplots(figsize = (10,10))
+ax.scatter(tmp[:,0], tmp[:,1], alpha = 0.5)
+ax.scatter(theoretical_tmp[:,0],theoretical_tmp[:,1], alpha = 0.5)
+
+
+# SGD
+fig, ax = plt.subplots()
+ax.scatter(tmp[:,0], tmp[:,1], alpha = 0.5)
+ax.scatter(theoretical_cloud[:,0],theoretical_cloud[:,1], alpha = 0.5)
+
+tmp = 0.1*np.random.multivariate_normal(np.zeros(2), 9*np.linalg.inv(X_cov), size = 100)
+plt.scatter(tmp[:,0], tmp[:,1], alpha = .5)

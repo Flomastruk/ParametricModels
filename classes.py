@@ -1,20 +1,37 @@
-
 import tqdm
 
 import numpy as np
 import tensorflow as tf
+from collections import OrderedDict
 # print(tf.__version__)
 
-from tensorflow.keras.losses import MeanSquaredError
+# from tensorflow.keras.losses import MeanSquaredError
 # from tensorflow.probability import MultivariateNormalFullCovariance
 
-from utils import tensor_to_numpy_dict, numpy_ravel, ravel_dicts
+from utils import tf_ravel_dict, weights_ravel_to_dict, ravel_inputs, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
 
 # TODO: define module-level Exceptions
 # TODO: dummy method ParametricModel.predict returns weights, this is illogical
 # TODO: loss compatibility (instead of user difined loss functions)
 # TODO: put example functions into a separate file
 # TODO: integrate tensorflow-based distributions
+
+class Error(Exception):
+    """Base class for exceptions in this module."""
+    pass
+
+class NoPredictionMethodError(Error):
+    """Exception raised when no prediction method is supplied"""
+
+    def __init__(self, message):
+        self.message = message
+
+class NoWeightsError(Error):
+    """Exception raised when no prediction method is supplied"""
+
+    def __init__(self, message):
+        self.message = message
+
 
 
 class ParametricModel():
@@ -32,15 +49,21 @@ class ParametricModel():
 
     def predict(self, input_features, weights = None):
 
+        exception_message = 'No prediction method is specified for model'
+        if self.name is not None:
+            exception_message += ' {}'.format(self.name)
+        raise NoPredictionMethodError(exception_message)
+
+    def get_weights(self, weights = None):
+
         if weights is None:
             try:
                 weights = self.weights
             except Exception as e:
                 exception_message = 'No weights were passed or pre-defined for predict method of the model'
                 if self.name is not None:
-                    exception_message += ' ' + "'{}'".format(self.name)
-                print(exception_message)
-                raise e
+                    exception_message += ' {}'.format(self.name)
+                raise NoWeightsError(exception_message)
         return weights
 
     def simulate(self, n_simulations):
@@ -75,9 +98,10 @@ class ModelFromConcreteFunction(ParametricModel):
             self.loss = loss
 
     def predict(self, input_features, weights = None):
-        weights = super().predict(input_features, weights)
+        weights = super().get_weights(weights = weights)
 
         return self.functional_equation(input_features, weights)
+
 
     def __call__(self, input_features, weights = None):
         """
@@ -86,34 +110,37 @@ class ModelFromConcreteFunction(ParametricModel):
         return self.predict(input_features, weights)
 
     # interesting note: if I wrap it this way and then
-    # recreate an optimizer, it would raise exception:
+    # recreate an optimizer, it would raise an exception:
     # ValueError: tf.function-decorated function tried to create variables on non-first call.
     @tf.function
-    def train_step(self, input_features, input_labels, weights = None, loss = None, optimizer = None, apply_gradients = True):
+    def train_step(self, input_features, input_labels, weights, loss, optimizer, apply_gradients = True):
 
         # TODO:??? uniform treatment for all models
+        # TODO: Loss reduction custom methods
         # optimizer = tf.keras.optimizers.Adam(learning_rate = 3e-2)
-        if weights is None:
-            weights = self.weights
+        print('Retracing train step')
+
 
         with tf.GradientTape() as tape:
             predictions = self.predict(input_features, weights = weights)
-            # print(predictions)
-            objective = loss(input_labels, predictions)
+            objective = tf.reduce_mean(loss(input_labels, predictions))
 
         trainable_weights = list(weights.values())
         gradients = tape.gradient(objective, trainable_weights)
-        optimizer.apply_gradients(zip(gradients, trainable_weights))
+
+        if apply_gradients:
+            optimizer.apply_gradients(zip(gradients, trainable_weights))
 
         return objective # train step returns current loss value
 
-
+    @tf.function
     def fit(self, input_features, input_labels, num_steps, weights = None, loss = None, optimizer = None, verbose = True):
         """
         Fit the model based on a set of input features and labels
         """
         # TODO: incorporate stopping times
-        # TODO: pipelines? should be a part of input_features/input_lables -- whatever is accepted by an API/function input
+        # TODO: pipelines? should be a part of input_features/input_labels -- whatever is accepted by an API/function input
+
         if weights is None:
             weights = self.weights
         if loss is None:
@@ -121,15 +148,14 @@ class ModelFromConcreteFunction(ParametricModel):
         if optimizer is None:
             optimizer = self.optimizer
 
-        for t in tqdm.tqdm(range(num_steps), disable = not verbose):
+        print("Retracing fit")
+        # for t in tqdm.tqdm(range(num_steps), disable = not verbose): ## does not support input tensors
+        for t in range(num_steps):
             self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer)
-            # print(weights)
 
-        # print("Current Predictions:\n")
-        # print(self(input_features))
-        if verbose:
-            log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
-            print(log_str)
+        # if verbose:
+        #     log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
+        #     print(log_str)
 
         return weights
 
@@ -151,16 +177,67 @@ class ModelFromConcreteFunction(ParametricModel):
             # reset weights to the initial guess
             self.assign_weights(weights_, weights)
             sample_input, sample_labels = self.simulate_experiment(num_samples)
-            self.fit(sample_input, sample_labels, num_steps, weights =  weights_, loss = loss, optimizer = optimizer, verbose = False)
+            self.fit(sample_input, sample_labels, num_steps, weights =  weights_, loss = loss, verbose = False)
             res.append(tensor_to_numpy_dict(weights_))
 
         return res
 
-    def d1d1t_plug_in_estimator(self, input_features, input_lables, weights = None):
-        with tf.GradientTape() as tape:
-            predictions = self.predict(input_features)
-            objective = loss(input_labels, predictions)
-        pass
+    def dldw2_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
 
-    def d2_plug_in(self, input_features, input_lables):
-        pass
+        if weights is None:
+            weights = self.weights
+        if loss is None:
+            loss = self.loss
+
+        # note --- loss has reduced_mean
+        with tf.GradientTape() as tape:
+            weights_ = tf_ravel_dict(weights)
+            functional_equation_ = ravel_inputs(self.functional_equation, weights)
+
+            pred_labels = functional_equation_(input_features, weights_)
+            L = loss(pred_labels, input_labels)
+
+        jac = tape.jacobian(L, weights_)
+        return tf.tensordot(jac, jac, axes = [[0], [0]])/input_labels.shape[0] # outer product of first derivatives
+
+
+        with tf.GradientTape() as tape:
+            predictions = self.predict(input_features, weights)
+            objective = loss(input_labels, predictions)
+        weights_list = list(weights.values())
+        d1dw = tape.gradient(objective, weights)
+        return d1dw
+
+    def d2ld2w_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
+
+        if weights is None:
+            weights = self.weights
+        if loss is None:
+            loss = self.loss
+
+        # this might cause duplication when multiple estimators are caused and inputs are ravelled
+        with tf.GradientTape() as tape1:
+            with tf.GradientTape() as tape2:
+                weights_ = tf_ravel_dict(weights)
+                functional_equation_ = ravel_inputs(self.functional_equation, weights)
+
+                pred_labels = functional_equation_(input_features, weights_)
+                L = loss(pred_labels, input_labels)
+            dldw = tape2.gradient(L, weights_)/input_labels.shape[0]
+
+        d2ldw2 = tape1.jacobian(dldw, weights_)
+        return d2ldw2
+
+    @tf.function
+    def parameter_covariance_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
+        print("Retracing covariance estimation")
+
+        if weights is None:
+            weights = self.weights
+        if loss is None:
+            loss = self.loss
+
+        dldw2 = self.dldw2_plug_in_estimator(input_features, input_labels, weights = weights, loss = loss)
+        d2ld2w_inv = tf.linalg.inv(self.d2ld2w_plug_in_estimator(input_features, input_labels, weights = weights, loss = loss))
+
+        return (d2ld2w_inv @ dldw2 @ d2ld2w_inv)/input_labels.shape[0]

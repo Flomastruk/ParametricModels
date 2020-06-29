@@ -8,63 +8,61 @@ from collections import OrderedDict
 # from tensorflow.keras.losses import MeanSquaredError
 # from tensorflow.probability import MultivariateNormalFullCovariance
 
-from utils import tf_ravel_dict, weights_ravel_to_dict, ravel_inputs, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
+from utils import tf_ravel_dict, params_ravel_to_dict, ravel_inputs, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
 
 # TODO: define module-level Exceptions
-# TODO: dummy method ParametricModel.predict returns weights, this is illogical
+# TODO: dummy method ParametricModel.predict returns params, this is illogical
 # TODO: loss compatibility (instead of user difined loss functions)
 # TODO: put example functions into a separate file
 # TODO: integrate tensorflow-based distributions
 
 class Error(Exception):
-    """Base class for exceptions in this module."""
+    '''Base class for exceptions in this module.'''
     pass
 
 class NoPredictionMethodError(Error):
-    """Exception raised when no prediction method is supplied"""
+    '''Exception raised when no prediction method is supplied'''
 
     def __init__(self, message):
         self.message = message
 
-class NoWeightsError(Error):
-    """Exception raised when no prediction method is supplied"""
+class NoparamsError(Error):
+    '''Exception raised when no prediction method is supplied'''
 
     def __init__(self, message):
         self.message = message
-
 
 
 class ParametricModel():
-    """
+    '''
     Dummy class with placeholder definitions
-    """
+    '''
 
-    def __init__(self, model_name = None, weights = None):
+    def __init__(self, model_name = None, params = None):
         self.name = model_name
-        if weights is not None:
-            self.weights = weights
+        if params is not None:
+            self.params = params
 
     def fit(self, data):
         pass
 
-    def predict(self, input_features, weights = None):
+    def predict(self, input_features, params = None):
 
-        exception_message = 'No prediction method is specified for model'
+        exception_message = 'No prediction method is specified for the model'
         if self.name is not None:
-            exception_message += ' {}'.format(self.name)
+            exception_message += f' {self.name}'
         raise NoPredictionMethodError(exception_message)
 
-    def get_weights(self, weights = None):
-
-        if weights is None:
+    def get_params(self, params = None):
+        if params is None:
             try:
-                weights = self.weights
+                params = self.params
             except Exception as e:
-                exception_message = 'No weights were passed or pre-defined for predict method of the model'
+                exception_message = 'No params were passed or pre-defined for predict method of the model'
                 if self.name is not None:
                     exception_message += ' {}'.format(self.name)
-                raise NoWeightsError(exception_message)
-        return weights
+                raise NoparamsError(exception_message)
+        return params
 
     def simulate(self, n_simulations):
         pass
@@ -72,172 +70,208 @@ class ParametricModel():
     def save(self, file_name = None):
         pass
 
-    def create_weight_dictionary(self, weight_values = None):
-        """
-        creates a dictionary of weight variables that have same key-shape pairs as the model
-        """
-        if weight_values is None:
-            weight_values = {key: val.numpy() for key, val in self.weights.items()}
-        return ({key:tf.Variable(val if isinstance(val, np.ndarray) else val.numpy()) for key, val in weight_values.items()})
+    def create_param_dictionary(self, param_values = None):
+        '''
+        creates a dictionary of param variables that have same key-shape pairs as the model
+        '''
+        if param_values is None:
+            param_values = {key: val.numpy() for key, val in self.params.items()}
+        return ({key:tf.Variable(val if isinstance(val, np.ndarray) else val.numpy()) for key, val in param_values.items()})
 
-    def assign_weights(self, weights, values):
-        for key, val in weights.items():
+    def assign_params(self, params, values):
+        for key, val in params.items():
             if key in values:
                 val.assign(values[key])
 
 
 class ModelFromConcreteFunction(ParametricModel):
 
-    def __init__(self, functional_equation, model_name = None, loss = None, weights = None, simulation_scheme = None):
+    def __init__(self, functional_equation, model_name = None, loss = None, params = None, simulation_scheme = None):
+        super().__init__(model_name = model_name, params = params)
         self.functional_equation = functional_equation
-        self.simulation_scheme = simulation_scheme
-
-        super().__init__(model_name = model_name, weights = weights)
 
         if loss is not None:
             self.loss = loss
+        if simulation_scheme is not None:
+            self.simulation_scheme = simulation_scheme
 
-    def predict(self, input_features, weights = None):
-        weights = super().get_weights(weights = weights)
+    def predict(self, input_features, params = None):
+        params = super().get_params(params = params)
 
-        return self.functional_equation(input_features, weights)
+        return self.functional_equation(input_features, params)
 
 
-    def __call__(self, input_features, weights = None):
-        """
+    def __call__(self, input_features, params = None):
+        '''
         Equivalent to predict
-        """
-        return self.predict(input_features, weights)
+        '''
+        return self.predict(input_features, params)
 
     # interesting note: if I wrap it this way and then
     # recreate an optimizer, it would raise an exception:
     # ValueError: tf.function-decorated function tried to create variables on non-first call.
     @tf.function
-    def train_step(self, input_features, input_labels, weights, loss, optimizer, apply_gradients = True):
+    def train_step(self, input_features, input_labels,
+        params, loss,
+        optimizer, apply_gradients = True,
+        weights = None, tot_weight = None):
 
         # TODO:??? uniform treatment for all models
-        # TODO: Loss reduction custom methods
         # optimizer = tf.keras.optimizers.Adam(learning_rate = 3e-2)
         print('Retracing train step')
 
-
         with tf.GradientTape() as tape:
-            predictions = self.predict(input_features, weights = weights)
-            objective = tf.reduce_mean(loss(input_labels, predictions))
+            predictions = self.predict(input_features, params = params)
+            if weights is None:
+                objective = tf.reduce_mean(loss(input_labels, predictions))
+            else:
+                assert input_labels.shape[0] == weights.shape[0], 'Weights must have same shape as input labels'
+                objective = tf.reduce_mean(weights*loss(input_labels, predictions))
 
-        trainable_weights = list(weights.values())
-        gradients = tape.gradient(objective, trainable_weights)
+        # TODO: create a mask with trainable params
+        trainable_params = list(params.values())
+        gradients = tape.gradient(objective, trainable_params)
 
         if apply_gradients:
-            optimizer.apply_gradients(zip(gradients, trainable_weights))
-
-        return objective # train step returns current loss value
-
-    @tf.function
-    def fit(self, input_features, input_labels, num_steps, weights = None, loss = None, optimizer = None, verbose = True):
-        """
-        Fit the model based on a set of input features and labels
-        """
-        # TODO: incorporate stopping times
-        # TODO: pipelines? should be a part of input_features/input_labels -- whatever is accepted by an API/function input
+            optimizer.apply_gradients(zip(gradients, trainable_params))
 
         if weights is None:
-            weights = self.weights
+            return objective # train step returns current loss value
+        else:  # if weights provided, renormalize post optimization step
+            return objective*weights.shape[0]/(tf.reduce_sum(weights) if tot_weight is None else tot_weight)
+
+    @tf.function
+    def fit(self, input_features, input_labels, num_steps,
+        params = None, loss = None, weights = None,
+        optimizer = None, verbose = True):
+        '''
+        Fit the model based on a set of input features and labels
+        '''
+        # TODO: incorporate stopping times
+
+        if params is None:
+            params = self.params
         if loss is None:
             loss = self.loss
         if optimizer is None:
             optimizer = self.optimizer
 
-        print("Retracing fit")
-        # for t in tqdm.tqdm(range(num_steps), disable = not verbose): ## does not support input tensors
-        for t in range(num_steps):
-            self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer)
+        print('Retracing fit method')
+        if weights is None:
+            for t in range(num_steps):
+                # for t in tqdm.tqdm(range(num_steps), disable = not verbose): ## does not support input tensors
+                self.train_step(input_features, input_labels,
+                    params = params, loss = loss, optimizer = optimizer)
+        else:
+            tot_weight = tf.reduce_sum(weights)
+            for t in range(num_steps):
+                self.train_step(input_features, input_labels,
+                    params = params, loss = loss, optimizer = optimizer,
+                    weights = weights, tot_weight = tot_weight)
 
         # if verbose:
-        #     log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, weights = weights, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
+        #     log_str = "Training complete, final loss: {0:.5f}".format(self.train_step(input_features, input_labels, params = params, loss = loss, optimizer = optimizer, apply_gradients = False).numpy())
         #     print(log_str)
 
-        return weights
+        return params
 
     def simulate_experiment(self, num_samples):
-        """
+        '''
         returns an array that comes from assigned simulation_scheme
-        """
+        '''
         if self.simulation_scheme is None:
             return
         return self.simulation_scheme(num_samples)
 
-    def fit_simulated_experiments(self, num_samples, num_experiments, num_steps, weights = None, loss = None, optimizer = None, verbose = True):
+    def fit_simulated_experiments(self, num_samples, num_experiments, num_steps,
+        params = None, weights = None, loss = None,
+        optimizer = None, verbose = True):
+        '''
+        `num_samples` number of training samples per experiment
+        `num_experiments` number of estimation experiments simulated
+        `num_steps` number of steps optimizer is applied for each experiment
+        `params` initial guess passed to optimization (optional if model has `params` attribute)
+        '''
         res = []
-        weights = self.weights if weights is None else weights
+        params = self.params if params is None else params
 
-        weights_ = self.create_weight_dictionary(weights)
+        params_ = self.create_param_dictionary(params)
         print("Begin fitting simulated experiments...")
         for ix_experiment in tqdm.tqdm(range(num_experiments), disable = not verbose):
-            # reset weights to the initial guess
-            self.assign_weights(weights_, weights)
+            # reset params to the initial guess
+            self.assign_params(params_, params)
             sample_input, sample_labels = self.simulate_experiment(num_samples)
-            self.fit(sample_input, sample_labels, num_steps, weights =  weights_, loss = loss, verbose = False)
-            res.append(tensor_to_numpy_dict(weights_))
+            self.fit(sample_input, sample_labels, num_steps, params =  params_, loss = loss, weights = weights, verbose = False)
+            res.append(tensor_to_numpy_dict(params_))
 
         return res
 
-    def dldw2_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
+    def dldw2_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
 
-        if weights is None:
-            weights = self.weights
+        if params is None:
+            params = self.params
         if loss is None:
             loss = self.loss
 
-        # note --- loss has reduced_mean
         with tf.GradientTape() as tape:
-            weights_ = tf_ravel_dict(weights)
-            functional_equation_ = ravel_inputs(self.functional_equation, weights)
+            params_ = tf_ravel_dict(params)
+            functional_equation_ = ravel_inputs(self.functional_equation, params)
 
-            pred_labels = functional_equation_(input_features, weights_)
-            L = loss(pred_labels, input_labels)
+            pred_labels = functional_equation_(input_features, params_)
+            L = loss(pred_labels, input_labels) # note --- loss always has reduced_mean across samples
 
-        jac = tape.jacobian(L, weights_)
-        return tf.tensordot(jac, jac, axes = [[0], [0]])/input_labels.shape[0] # outer product of first derivatives
-
-
-        with tf.GradientTape() as tape:
-            predictions = self.predict(input_features, weights)
-            objective = loss(input_labels, predictions)
-        weights_list = list(weights.values())
-        d1dw = tape.gradient(objective, weights)
-        return d1dw
-
-    def d2ld2w_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
+        jac = tape.jacobian(L, params_)
 
         if weights is None:
-            weights = self.weights
+            return tf.tensordot(jac, jac, axes = [[0], [0]])/input_labels.shape[0] # outer product of first derivatives
+        else:
+            assert jac.shape[0] == weights.shape[0]
+            # TODO: think about theoretical framework. What is the proper way to normalize this and what is the meaning
+            jac_w = tf.reshape(weights, (-1,1))*jac
+            return tf.tensordot(jac_w, jac_w, axes = [[0], [0]])
+
+
+        with tf.GradientTape() as tape:
+            predictions = self.predict(input_features, params)
+            objective = loss(input_labels, predictions)
+        params_list = list(params.values())
+        d1dw = tape.gradient(objective, params)
+        return d1dw
+
+    def d2ld2w_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
+
+        if params is None:
+            params = self.params
         if loss is None:
             loss = self.loss
 
         # this might cause duplication when multiple estimators are caused and inputs are ravelled
         with tf.GradientTape() as tape1:
             with tf.GradientTape() as tape2:
-                weights_ = tf_ravel_dict(weights)
-                functional_equation_ = ravel_inputs(self.functional_equation, weights)
+                params_ = tf_ravel_dict(params)
+                functional_equation_ = ravel_inputs(self.functional_equation, params)
 
-                pred_labels = functional_equation_(input_features, weights_)
-                L = loss(pred_labels, input_labels)
-            dldw = tape2.gradient(L, weights_)/input_labels.shape[0]
+                pred_labels = functional_equation_(input_features, params_)
+                if weights is None:
+                    L = loss(pred_labels, input_labels)
+                else:
+                    L = weights*loss(pred_labels, input_labels)
+            dldw = tape2.gradient(L, params_)/input_labels.shape[0] if weights is None else tape2.gradient(L, params_)
 
-        d2ldw2 = tape1.jacobian(dldw, weights_)
+        d2ldw2 = tape1.jacobian(dldw, params_)
         return d2ldw2
 
+
     @tf.function
-    def parameter_covariance_plug_in_estimator(self, input_features, input_labels, weights = None, loss = None):
+    def parameter_covariance_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
         print("Retracing covariance estimation")
 
-        if weights is None:
-            weights = self.weights
+        if params is None:
+            params = self.params
         if loss is None:
             loss = self.loss
 
-        dldw2 = self.dldw2_plug_in_estimator(input_features, input_labels, weights = weights, loss = loss)
-        d2ld2w_inv = tf.linalg.inv(self.d2ld2w_plug_in_estimator(input_features, input_labels, weights = weights, loss = loss))
+        dldw2 = self.dldw2_plug_in_estimator(input_features, input_labels, params = params, weights = weights, loss = loss)
+        d2ld2w_inv = tf.linalg.inv(self.d2ld2w_plug_in_estimator(input_features, input_labels, params = params, weights = weights, loss = loss))
 
-        return (d2ld2w_inv @ dldw2 @ d2ld2w_inv)/input_labels.shape[0]
+        return (d2ld2w_inv @ dldw2 @ d2ld2w_inv)/input_labels.shape[0] if weights is None else (d2ld2w_inv @ dldw2 @ d2ld2w_inv)

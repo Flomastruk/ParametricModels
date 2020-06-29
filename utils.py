@@ -30,6 +30,15 @@ def ravel_inputs(functional_equation, signature_params):
     return functional_equation_ravel
 
 
+def ravel_loss(loss, signature_params):
+
+    def loss_ravel_equation(input_labels, predictions, params_ravel):
+        params = params_ravel_to_dict(params_ravel, signature_params)
+        return loss(input_labels, predictions, params)
+
+    return loss_ravel_equation
+
+
 def tensor_to_numpy_dict(tensor_dict):
     return {key:val.numpy() for key,val in tensor_dict.items()}
 

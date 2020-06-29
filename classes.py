@@ -8,7 +8,7 @@ from collections import OrderedDict
 # from tensorflow.keras.losses import MeanSquaredError
 # from tensorflow.probability import MultivariateNormalFullCovariance
 
-from utils import tf_ravel_dict, params_ravel_to_dict, ravel_inputs, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
+from utils import tf_ravel_dict, params_ravel_to_dict, ravel_inputs, ravel_loss, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
 
 # TODO: define module-level Exceptions
 # TODO: dummy method ParametricModel.predict returns params, this is illogical
@@ -123,10 +123,10 @@ class ModelFromConcreteFunction(ParametricModel):
         with tf.GradientTape() as tape:
             predictions = self.predict(input_features, params = params)
             if weights is None:
-                objective = tf.reduce_mean(loss(input_labels, predictions))
+                objective = tf.reduce_mean(loss(input_labels, predictions, params))
             else:
                 assert input_labels.shape[0] == weights.shape[0], 'Weights must have same shape as input labels'
-                objective = tf.reduce_mean(weights*loss(input_labels, predictions))
+                objective = tf.reduce_mean(weights*loss(input_labels, predictions, params))
 
         # TODO: create a mask with trainable params
         trainable_params = list(params.values())
@@ -216,9 +216,10 @@ class ModelFromConcreteFunction(ParametricModel):
         with tf.GradientTape() as tape:
             params_ = tf_ravel_dict(params)
             functional_equation_ = ravel_inputs(self.functional_equation, params)
+            loss_ = ravel_loss(loss, params)
 
             pred_labels = functional_equation_(input_features, params_)
-            L = loss(pred_labels, input_labels) # note --- loss always has reduced_mean across samples
+            L = loss_(pred_labels, input_labels, params_) # note --- loss always has reduced_mean across samples
 
         jac = tape.jacobian(L, params_)
 
@@ -230,13 +231,6 @@ class ModelFromConcreteFunction(ParametricModel):
             jac_w = tf.reshape(weights, (-1,1))*jac
             return tf.tensordot(jac_w, jac_w, axes = [[0], [0]])
 
-
-        with tf.GradientTape() as tape:
-            predictions = self.predict(input_features, params)
-            objective = loss(input_labels, predictions)
-        params_list = list(params.values())
-        d1dw = tape.gradient(objective, params)
-        return d1dw
 
     def d2ld2w_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
 
@@ -250,12 +244,13 @@ class ModelFromConcreteFunction(ParametricModel):
             with tf.GradientTape() as tape2:
                 params_ = tf_ravel_dict(params)
                 functional_equation_ = ravel_inputs(self.functional_equation, params)
+                loss_ = ravel_loss(loss, params)
 
                 pred_labels = functional_equation_(input_features, params_)
                 if weights is None:
-                    L = loss(pred_labels, input_labels)
+                    L = loss_(pred_labels, input_labels, params_)
                 else:
-                    L = weights*loss(pred_labels, input_labels)
+                    L = weights*loss_(pred_labels, input_labels, params_)
             dldw = tape2.gradient(L, params_)/input_labels.shape[0] if weights is None else tape2.gradient(L, params_)
 
         d2ldw2 = tape1.jacobian(dldw, params_)

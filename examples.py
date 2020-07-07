@@ -3,16 +3,10 @@ import os
 import numpy as np
 import tensorflow as tf
 
-import matplotlib.pyplot as plt
-import seaborn as sns
-plt.style.use('seaborn')
-
 from collections import OrderedDict
 
 from classes import ModelFromConcreteFunction
 from utils import ravel_inputs, tf_ravel_dict, ravel_dicts
-
-from scipy.stats import chi2
 
 
 @tf.function
@@ -48,45 +42,6 @@ def linear_gaussian_simulation_scheme(X_mean, X_cov, params, y_ssq):
         return tf.Variable(X_sim) , y_sim
     return concrete_linear_simulation_scheme
 
-
-def quadratic_form(m, V):
-    def quad(z):
-        z0 = z - m.reshape(1, -1)
-        V_inv = np.linalg.inv(V)
-
-        return np.sum(z0*np.matmul(z0, V_inv), axis = 1)
-    return quad
-
-
-def plot_confidence_2d_projection(m, cov, proj, res_ravel = None, quantiles = [0.95, 0.975, 0.99, 0.9995], figsize = (10,10)):
-    '''
-    `m`     np.array, region center, e.g. parameter estimator
-    `cov`   np.array, full covariance matrix of size = (n_cov, n_cov), e.g. from parameter estimation
-    `proj`  np.array, projection matrix on 2-plane of size = (n_cov, 2)
-    `res_ravel` np.array, if given -- ovelayed with scatter plots
-
-    Plots contours of confidence regions for a given 2d projection of a multivariate normal distribution
-    '''
-    contour_levels = chi2(df = 2).ppf(quantiles)
-    m_proj = proj.T @ m
-    cov_proj = proj.T @ cov @ proj
-    quad = quadratic_form(m_proj, cov_proj)
-
-    lim_val = np.linalg.eig(cov_proj)[0].max()**.5*contour_levels.max()**.5
-
-    ux = np.linspace(m_proj[0] - lim_val, m_proj[0] + lim_val, 100)
-    uy = np.linspace(m_proj[1] - lim_val, m_proj[1] + lim_val, 100)
-    xs, ys = np.meshgrid(ux, uy)
-    xy = np.concatenate([xs.reshape(-1,1), ys.reshape(-1,1)], axis = -1)
-
-    fig, ax = plt.subplots(figsize = figsize)
-    ax.contour(xs, ys, quad(xy).reshape(100,100), contour_levels, colors  = 'red')
-
-    if res_ravel is not None:
-        res_proj = res_ravel @ proj
-        ax.scatter(res_proj[:,0],res_proj[:,1], alpha = 0.5)
-
-    return quad
 
 
 
@@ -205,7 +160,7 @@ plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))
 
 
 
-## Part III. Model with nonlinear functional equation
+## Part III. Model with non-linear functional equation
 
 @tf.function
 def scurve_equation(input_features, params):
@@ -249,8 +204,7 @@ res = mcs.fit_simulated_experiments(num_samples = 10000
     , num_experiments = 100
     , num_steps = tf.Variable(2000)
     , params = scurve_params2
-    , loss = sq_loss # could be sq_loss, cause it is automatically reduced
-    # , optimizer = optimizer
+    , loss = sq_loss
     )
 
 
@@ -265,7 +219,7 @@ plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))
 
 
 
-## Part IV. Model with heteroskedasticity and Log-likelihood estimation
+## Part IV. Log-likelihood estimation
 
 @tf.function
 def ll_gaussian_loss(labels, predictions, params):
@@ -374,8 +328,7 @@ res = mch.fit_simulated_experiments(num_samples = 10000
     , num_experiments = 100
     , num_steps = tf.Variable(4000)
     , params = linear_params4
-    , loss = ll_heteroskedastic_gaussian_loss # could be sq_loss, cause it is automatically reduced
-    # , optimizer = optimizer
+    , loss = ll_heteroskedastic_gaussian_loss
     )
 
 

@@ -8,7 +8,7 @@ from collections import OrderedDict
 # from tensorflow.keras.losses import MeanSquaredError
 # from tensorflow.probability import MultivariateNormalFullCovariance
 
-from utils import tf_ravel_dict, params_ravel_to_dict, ravel_inputs, ravel_loss, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
+from parametricmodels.utils import tf_ravel_dict, params_ravel_to_dict, ravel_inputs, ravel_loss, tensor_to_numpy_dict, numpy_ravel, ravel_dicts
 
 # TODO: define module-level Exceptions
 # TODO: dummy method ParametricModel.predict returns params, this is illogical

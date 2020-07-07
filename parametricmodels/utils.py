@@ -70,3 +70,45 @@ def ravel_dicts(list_of_dicts):
     for i, d in enumerate(list_of_dicts):
         res[i, :] = np.concatenate([numpy_ravel(val) for val in d.values()])
     return res
+
+
+
+
+def quadratic_form(m, V):
+    def quad(z):
+        z0 = z - m.reshape(1, -1)
+        V_inv = np.linalg.inv(V)
+
+        return np.sum(z0*np.matmul(z0, V_inv), axis = 1)
+    return quad
+
+
+def plot_confidence_2d_projection(m, cov, proj, res_ravel = None, quantiles = [0.95, 0.975, 0.99, 0.9995], figsize = (10,10)):
+    '''
+    `m`     np.array, region center, e.g. parameter estimator
+    `cov`   np.array, full covariance matrix of size = (n_cov, n_cov), e.g. from parameter estimation
+    `proj`  np.array, projection matrix on 2-plane of size = (n_cov, 2)
+    `res_ravel` np.array, if given -- ovelayed with scatter plots
+
+    Plots contours of confidence regions for a given 2d projection of a multivariate normal distribution
+    '''
+    contour_levels = chi2(df = 2).ppf(quantiles)
+    m_proj = proj.T @ m
+    cov_proj = proj.T @ cov @ proj
+    quad = quadratic_form(m_proj, cov_proj)
+
+    lim_val = np.linalg.eig(cov_proj)[0].max()**.5*contour_levels.max()**.5
+
+    ux = np.linspace(m_proj[0] - lim_val, m_proj[0] + lim_val, 100)
+    uy = np.linspace(m_proj[1] - lim_val, m_proj[1] + lim_val, 100)
+    xs, ys = np.meshgrid(ux, uy)
+    xy = np.concatenate([xs.reshape(-1,1), ys.reshape(-1,1)], axis = -1)
+
+    fig, ax = plt.subplots(figsize = figsize)
+    ax.contour(xs, ys, quad(xy).reshape(100,100), contour_levels, colors  = 'red')
+
+    if res_ravel is not None:
+        res_proj = res_ravel @ proj
+        ax.scatter(res_proj[:,0],res_proj[:,1], alpha = 0.5)
+
+    return quad

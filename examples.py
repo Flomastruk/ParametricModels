@@ -372,7 +372,7 @@ mch.simulation_scheme = linear_heteroskedastic_gaussian_simulation_scheme(
 
 res = mch.fit_simulated_experiments(num_samples = 10000
     , num_experiments = 100
-    , num_steps = tf.Variable(2000)
+    , num_steps = tf.Variable(4000)
     , params = linear_params4
     , loss = ll_heteroskedastic_gaussian_loss # could be sq_loss, cause it is automatically reduced
     # , optimizer = optimizer
@@ -383,8 +383,15 @@ res = mch.fit_simulated_experiments(num_samples = 10000
 
 m = ravel_dicts([linear_params4])
 tmp_x, tmp_y = mch.simulation_scheme(10000)
+mch.fit(tmp_x, tmp_y, num_steps = tf.Variable(4000), params = linear_params4, loss = ll_heteroskedastic_gaussian_loss)
 cov_est = mch.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params4, loss = ll_heteroskedastic_gaussian_loss)
+cov_est = mch.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, mch.params, loss = ll_heteroskedastic_gaussian_loss)
 
 proj = np.eye(3,2)[[2,2,2,0,1,2]]
+proj = np.eye(3,2)[[2,2,2,0,2,1]]
+proj = np.eye(3,2)[[0,1,2,2,2,2]]
+proj = np.eye(3,2)[[0,2,1,2,2,2]]
 
+
+plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))
 plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))

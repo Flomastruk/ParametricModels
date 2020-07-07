@@ -284,7 +284,7 @@ class ModelFromConcreteFunction(ParametricModel):
                     if loss_from_features:
                         losses = weights*loss_(input_labels, predictions, input_features, params_)
                     else:
-                        losses = weigths*loss_(input_labels, predictions, params_)
+                        losses = weights*loss_(input_labels, predictions, params_)
 
             dldw = tape2.gradient(losses, params_)/input_labels.shape[0] if weights is None else tape2.gradient(losses, params_)
 

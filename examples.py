@@ -10,16 +10,18 @@ plt.style.use('seaborn')
 from collections import OrderedDict
 
 from classes import ModelFromConcreteFunction
-from utils import ravel_inputs, tf_ravel_dict,ravel_dicts
+from utils import ravel_inputs, tf_ravel_dict, ravel_dicts
+
+from scipy.stats import chi2
 
 
 @tf.function
 def linear_equation(input_features, params):
     return tf.squeeze(tf.matmul(input_features, params['W']))+ params['b']
 
-@tf.function
-def msq_loss(labels, predictions, params = None):
-    return tf.reduce_mean(tf.square(labels - predictions))
+# @tf.function
+# def msq_loss(labels, predictions, params = None):
+#     return tf.reduce_mean(tf.square(labels - predictions))
 
 @tf.function
 def sq_loss(labels, predictions, params = None):
@@ -27,7 +29,6 @@ def sq_loss(labels, predictions, params = None):
 
 
 def functional_gaussian_simulation_scheme(X_mean, X_cov, params, y_ssq, functional_equation):
-    # @tf.function
     def concrete_functional_simulation_scheme(num_samples):
         X_sim = np.random.multivariate_normal(mean = X_mean, cov = X_cov, size = num_samples).astype(np.float32)
         err = np.random.normal(loc = 0., size = num_samples, scale = np.sqrt(y_ssq)).astype(np.float32)
@@ -57,14 +58,14 @@ def quadratic_form(m, V):
     return quad
 
 
-from scipy.stats import chi2
-
 def plot_confidence_2d_projection(m, cov, proj, res_ravel = None, quantiles = [0.95, 0.975, 0.99, 0.9995], figsize = (10,10)):
     '''
     `m`     np.array, region center, e.g. parameter estimator
     `cov`   np.array, full covariance matrix of size = (n_cov, n_cov), e.g. from parameter estimation
     `proj`  np.array, projection matrix on 2-plane of size = (n_cov, 2)
     `res_ravel` np.array, if given -- ovelayed with scatter plots
+
+    Plots contours of confidence regions for a given 2d projection of a multivariate normal distribution
     '''
     contour_levels = chi2(df = 2).ppf(quantiles)
     m_proj = proj.T @ m
@@ -131,7 +132,7 @@ res = mc.fit_simulated_experiments(num_samples = 100
     , num_experiments = 100
     , num_steps = tf.Variable(2000)
     , params = linear_params0
-    , loss = msq_loss # could be sq_loss, cause it is automatically reduced
+    , loss = sq_loss
     # , optimizer = optimizer
     )
 
@@ -244,7 +245,7 @@ mcs.simulation_scheme = functional_gaussian_simulation_scheme(
 
 
 # mc.simulate_experiment(10)
-res = mcs.fit_simulated_experiments(num_samples = 1000
+res = mcs.fit_simulated_experiments(num_samples = 10000
     , num_experiments = 100
     , num_steps = tf.Variable(2000)
     , params = scurve_params2
@@ -253,7 +254,7 @@ res = mcs.fit_simulated_experiments(num_samples = 1000
     )
 
 
-tmp_x, tmp_y = mcs.simulation_scheme(1000)
+tmp_x, tmp_y = mcs.simulation_scheme(10000)
 
 m = ravel_dicts([scurve_params2])
 cov_est = mcs.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, scurve_params2, loss = sq_loss)
@@ -291,12 +292,6 @@ mcl.simulation_scheme = linear_gaussian_simulation_scheme(
     y_ssq = sigma.numpy()**2
     )
 
-tmp_x, tmp_y = mcl.simulation_scheme(100)
-mcl.dldw2_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
-mcl.d2ld2w_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
-cov_tmp = mcl.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
-
-
 
 # mc.simulate_experiment(10)
 res = mcl.fit_simulated_experiments(num_samples = 1000
@@ -308,13 +303,88 @@ res = mcl.fit_simulated_experiments(num_samples = 1000
     )
 
 
-# use to overlay with theoretical cloud
-# theoretical_tmp = (W0.numpy().T + 0.1*np.random.multivariate_normal(np.zeros(2), 9*np.linalg.inv(X_cov), size = 100))
+
 m = ravel_dicts([linear_params3])
 tmp_x, tmp_y = mcl.simulation_scheme(1000)
 cov_est = mcl.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
 
 proj = np.eye(3,2)[[2,2,0,1]]
 
+
+plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))
+
+
+# tmp_x, tmp_y = mcl.simulation_scheme(100)
+# mcl.dldw2_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
+# mcl.d2ld2w_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
+# cov_tmp = mcl.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params3, loss = ll_gaussian_loss)
+
+## Part V. Heteroskedastic model
+
+@tf.function
+def ll_heteroskedastic_gaussian_loss(labels, predictions, features, params):
+    # note the sign is flipped for minimization problem
+    # note constant = .5*tf.math.log(2*np.pi) is removed from the result
+    ssq = tf.square(tf.squeeze(tf.matmul(features, params['T'])) + params['sigma'])
+    return .5*tf.math.log(ssq) + .5*tf.square(labels - predictions)/ssq
+
+
+def linear_heteroskedastic_gaussian_simulation_scheme(X_mean, X_cov, params):
+    # @tf.function
+    def concrete_linear_simulation_scheme(num_samples):
+        X_sim = np.random.multivariate_normal(mean = X_mean, cov = X_cov, size = num_samples).astype(np.float32)
+        err = np.random.normal(loc = 0., size = num_samples, scale = 1.).astype(np.float32)
+        err*= tf.squeeze(X_sim @ params['T']) + params['sigma']
+        y_sim = linear_equation(X_sim, params) + err
+
+        return tf.Variable(X_sim) , y_sim
+    return concrete_linear_simulation_scheme
+
+
+
+W4 = tf.Variable([[-.5],[.8]], dtype = tf.float32)
+b4 = tf.Variable(1.0, dtype = tf.float32)
+T4 = tf.Variable([[1],[0]], dtype = tf.float32)
+sigma4 = tf.Variable(3.0, dtype = tf.float32)
+linear_params4 = OrderedDict({'W': W4, 'b': b4, 'T': T4, 'sigma': sigma4})
+
+
+mch = ModelFromConcreteFunction(linear_equation, model_name = "test_h_model", params = linear_params4, loss_from_features = True)
+mch.optimizer = tf.keras.optimizers.Adam(learning_rate = 1e-2)
+mch.loss = ll_heteroskedastic_gaussian_loss
+
+
+
+
+X_cov = np.array([[10, 9.5], [9.5,10]], dtype = np.float32)
+mch.simulation_scheme = linear_heteroskedastic_gaussian_simulation_scheme(
+    np.array([10., 10.], dtype = np.float32),
+    X_cov,
+    linear_params4,
+    )
+
+
+# tmp_x, tmp_y = mch.simulation_scheme(100)
+# mch.dldw2_plug_in_estimator(tmp_x, tmp_y, linear_params4, loss = ll_heteroskedastic_gaussian_loss)
+# mch.d2ld2w_plug_in_estimator(tmp_x, tmp_y, linear_params4, loss = ll_heteroskedastic_gaussian_loss)
+# cov_tmp = mch.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params4, loss = ll_heteroskedastic_gaussian_loss)
+
+
+res = mch.fit_simulated_experiments(num_samples = 10000
+    , num_experiments = 100
+    , num_steps = tf.Variable(2000)
+    , params = linear_params4
+    , loss = ll_heteroskedastic_gaussian_loss # could be sq_loss, cause it is automatically reduced
+    # , optimizer = optimizer
+    )
+
+
+
+
+m = ravel_dicts([linear_params4])
+tmp_x, tmp_y = mch.simulation_scheme(10000)
+cov_est = mch.parameter_covariance_plug_in_estimator(tmp_x, tmp_y, linear_params4, loss = ll_heteroskedastic_gaussian_loss)
+
+proj = np.eye(3,2)[[2,2,2,0,1,2]]
 
 plot_confidence_2d_projection(m.reshape(-1,1), cov_est, proj, ravel_dicts(res))

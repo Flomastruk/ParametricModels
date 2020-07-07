@@ -30,11 +30,18 @@ def ravel_inputs(functional_equation, signature_params):
     return functional_equation_ravel
 
 
-def ravel_loss(loss, signature_params):
-
-    def loss_ravel_equation(input_labels, predictions, params_ravel):
-        params = params_ravel_to_dict(params_ravel, signature_params)
-        return loss(input_labels, predictions, params)
+def ravel_loss(loss, signature_params, loss_from_features = False):
+    '''
+    retrurn a funciton that accepts flat parameter inputs
+    '''
+    if loss_from_features:
+        def loss_ravel_equation(input_labels, predictions, input_features, params_ravel):
+            params = params_ravel_to_dict(params_ravel, signature_params)
+            return loss(input_labels, predictions, input_features, params)
+    else:
+        def loss_ravel_equation(input_labels, predictions, params_ravel):
+            params = params_ravel_to_dict(params_ravel, signature_params)
+            return loss(input_labels, predictions, params)
 
     return loss_ravel_equation
 

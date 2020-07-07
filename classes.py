@@ -86,12 +86,14 @@ class ParametricModel():
 
 class ModelFromConcreteFunction(ParametricModel):
 
-    def __init__(self, functional_equation, model_name = None, loss = None, params = None, simulation_scheme = None):
+    def __init__(self, functional_equation, model_name = None, loss = None, loss_from_features = None, params = None, simulation_scheme = None):
         super().__init__(model_name = model_name, params = params)
         self.functional_equation = functional_equation
 
         if loss is not None:
             self.loss = loss
+        if loss_from_features is not None:
+            self.loss_from_features = loss_from_features
         if simulation_scheme is not None:
             self.simulation_scheme = simulation_scheme
 
@@ -112,9 +114,8 @@ class ModelFromConcreteFunction(ParametricModel):
     # ValueError: tf.function-decorated function tried to create variables on non-first call.
     @tf.function
     def train_step(self, input_features, input_labels,
-        params, loss,
-        optimizer, apply_gradients = True,
-        weights = None, tot_weight = None):
+        params, loss, loss_from_features, optimizer,
+        apply_gradients = True, weights = None, tot_weight = None):
 
         # TODO:??? uniform treatment for all models
         # optimizer = tf.keras.optimizers.Adam(learning_rate = 3e-2)
@@ -122,11 +123,16 @@ class ModelFromConcreteFunction(ParametricModel):
 
         with tf.GradientTape() as tape:
             predictions = self.predict(input_features, params = params)
+            if loss_from_features:
+                losses = loss(input_labels, predictions, input_features, params)
+            else:
+                losses = loss(input_labels, predictions, params)
+
             if weights is None:
-                objective = tf.reduce_mean(loss(input_labels, predictions, params))
+                objective = tf.reduce_mean(losses)
             else:
                 assert input_labels.shape[0] == weights.shape[0], 'Weights must have same shape as input labels'
-                objective = tf.reduce_mean(weights*loss(input_labels, predictions, params))
+                objective = tf.reduce_mean(weights*losses)
 
         # TODO: create a mask with trainable params
         trainable_params = list(params.values())
@@ -142,10 +148,11 @@ class ModelFromConcreteFunction(ParametricModel):
 
     @tf.function
     def fit(self, input_features, input_labels, num_steps,
-        params = None, loss = None, weights = None,
+        params = None, loss = None, loss_from_features = None, weights = None,
         optimizer = None, verbose = True):
         '''
         Fit the model based on a set of input features and labels
+        `loss_from_features` if True, then loss is passed `input_features` not predictions
         '''
         # TODO: incorporate stopping times
 
@@ -153,6 +160,10 @@ class ModelFromConcreteFunction(ParametricModel):
             params = self.params
         if loss is None:
             loss = self.loss
+        if loss_from_features is None and hasattr(self, 'loss_from_features'):
+            loss_from_features = self.loss_from_features
+        elif loss_from_features is None:
+            loss_from_features = False
         if optimizer is None:
             optimizer = self.optimizer
 
@@ -161,12 +172,12 @@ class ModelFromConcreteFunction(ParametricModel):
             for t in range(num_steps):
                 # for t in tqdm.tqdm(range(num_steps), disable = not verbose): ## does not support input tensors
                 self.train_step(input_features, input_labels,
-                    params = params, loss = loss, optimizer = optimizer)
+                    params = params, loss = loss, loss_from_features = loss_from_features, optimizer = optimizer)
         else:
             tot_weight = tf.reduce_sum(weights)
             for t in range(num_steps):
                 self.train_step(input_features, input_labels,
-                    params = params, loss = loss, optimizer = optimizer,
+                    params = params, loss = loss, loss_from_features = loss_from_features, optimizer = optimizer,
                     weights = weights, tot_weight = tot_weight)
 
         # if verbose:
@@ -184,7 +195,7 @@ class ModelFromConcreteFunction(ParametricModel):
         return self.simulation_scheme(num_samples)
 
     def fit_simulated_experiments(self, num_samples, num_experiments, num_steps,
-        params = None, weights = None, loss = None,
+        params = None, weights = None, loss = None, loss_from_features = None,
         optimizer = None, verbose = True):
         '''
         `num_samples` number of training samples per experiment
@@ -201,27 +212,39 @@ class ModelFromConcreteFunction(ParametricModel):
             # reset params to the initial guess
             self.assign_params(params_, params)
             sample_input, sample_labels = self.simulate_experiment(num_samples)
-            self.fit(sample_input, sample_labels, num_steps, params =  params_, loss = loss, weights = weights, verbose = False)
+            self.fit(sample_input, sample_labels, num_steps
+                , params =  params_, loss = loss, loss_from_features = loss_from_features
+                , weights = weights, verbose = False)
             res.append(tensor_to_numpy_dict(params_))
 
         return res
 
-    def dldw2_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
+    def dldw2_plug_in_estimator(self, input_features, input_labels, params = None, weights = None
+        , loss = None, loss_from_features = None):
 
         if params is None:
             params = self.params
         if loss is None:
             loss = self.loss
+        if loss_from_features is None and hasattr(self, 'loss_from_features'):
+            loss_from_features = self.loss_from_features
+        elif loss_from_features is None:
+            loss_from_features = False
 
         with tf.GradientTape() as tape:
             params_ = tf_ravel_dict(params)
             functional_equation_ = ravel_inputs(self.functional_equation, params)
-            loss_ = ravel_loss(loss, params)
+            loss_ = ravel_loss(loss, params, loss_from_features = loss_from_features)
 
-            pred_labels = functional_equation_(input_features, params_)
-            L = loss_(pred_labels, input_labels, params_) # note --- loss always has reduced_mean across samples
+            predictions = functional_equation_(input_features, params_)
+            if loss_from_features:
+                # print(loss_from_features)
+                # print(loss_)
+                losses = loss_(input_labels, predictions, input_features, params_) # note --- loss always has reduced_mean across samples
+            else:
+                losses = loss_(input_labels, predictions, params_)
 
-        jac = tape.jacobian(L, params_)
+        jac = tape.jacobian(losses, params_)
 
         if weights is None:
             return tf.tensordot(jac, jac, axes = [[0], [0]])/input_labels.shape[0] # outer product of first derivatives
@@ -232,33 +255,46 @@ class ModelFromConcreteFunction(ParametricModel):
             return tf.tensordot(jac_w, jac_w, axes = [[0], [0]])
 
 
-    def d2ld2w_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
+    def d2ld2w_plug_in_estimator(self, input_features, input_labels, params = None, weights = None
+        , loss = None, loss_from_features = None):
 
         if params is None:
             params = self.params
         if loss is None:
             loss = self.loss
+        if loss_from_features is None and hasattr(self, 'loss_from_features'):
+            loss_from_features = self.loss_from_features
+        elif loss_from_features is None:
+            loss_from_features = False
 
         # this might cause duplication when multiple estimators are caused and inputs are ravelled
         with tf.GradientTape() as tape1:
             with tf.GradientTape() as tape2:
                 params_ = tf_ravel_dict(params)
                 functional_equation_ = ravel_inputs(self.functional_equation, params)
-                loss_ = ravel_loss(loss, params)
+                loss_ = ravel_loss(loss, params, loss_from_features = loss_from_features)
 
-                pred_labels = functional_equation_(input_features, params_)
+                predictions = functional_equation_(input_features, params_)
                 if weights is None:
-                    L = loss_(pred_labels, input_labels, params_)
+                    if loss_from_features:
+                        losses = loss_(input_labels, predictions, input_features, params_)
+                    else:
+                        losses = loss_(input_labels, predictions, params_)
                 else:
-                    L = weights*loss_(pred_labels, input_labels, params_)
-            dldw = tape2.gradient(L, params_)/input_labels.shape[0] if weights is None else tape2.gradient(L, params_)
+                    if loss_from_features:
+                        losses = weights*loss_(input_labels, predictions, input_features, params_)
+                    else:
+                        losses = weigths*loss_(input_labels, predictions, params_)
+
+            dldw = tape2.gradient(losses, params_)/input_labels.shape[0] if weights is None else tape2.gradient(losses, params_)
 
         d2ldw2 = tape1.jacobian(dldw, params_)
         return d2ldw2
 
 
     @tf.function
-    def parameter_covariance_plug_in_estimator(self, input_features, input_labels, params = None, weights = None, loss = None):
+    def parameter_covariance_plug_in_estimator(self, input_features, input_labels, params = None, weights = None
+        , loss = None, loss_from_features = None):
         print("Retracing covariance estimation")
 
         if params is None:
@@ -266,7 +302,9 @@ class ModelFromConcreteFunction(ParametricModel):
         if loss is None:
             loss = self.loss
 
-        dldw2 = self.dldw2_plug_in_estimator(input_features, input_labels, params = params, weights = weights, loss = loss)
-        d2ld2w_inv = tf.linalg.inv(self.d2ld2w_plug_in_estimator(input_features, input_labels, params = params, weights = weights, loss = loss))
+        dldw2 = self.dldw2_plug_in_estimator(input_features, input_labels, params = params, weights = weights
+            , loss = loss, loss_from_features = loss_from_features)
+        d2ld2w_inv = tf.linalg.inv(self.d2ld2w_plug_in_estimator(input_features, input_labels, params = params, weights = weights
+            , loss = loss, loss_from_features = loss_from_features))
 
         return (d2ld2w_inv @ dldw2 @ d2ld2w_inv)/input_labels.shape[0] if weights is None else (d2ld2w_inv @ dldw2 @ d2ld2w_inv)

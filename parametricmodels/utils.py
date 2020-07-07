@@ -2,6 +2,11 @@
 import numpy as np
 import tensorflow as tf
 
+import matplotlib.pyplot as plt
+from scipy.stats import chi2
+import seaborn as sns
+plt.style.use('seaborn')
+
 
 def tf_ravel_dict(tensor_dict):
     """
@@ -112,3 +117,8 @@ def plot_confidence_2d_projection(m, cov, proj, res_ravel = None, quantiles = [0
         ax.scatter(res_proj[:,0],res_proj[:,1], alpha = 0.5)
 
     return quad
+
+
+@tf.function
+def sq_loss(labels, predictions, params = None):
+    return tf.square(labels - predictions)
